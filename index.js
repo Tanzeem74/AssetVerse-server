@@ -78,6 +78,16 @@ async function run() {
             res.send({ role: user?.role })
         })
 
+        //packages
+        app.get("/packages", async (req, res) => {
+            try {
+                const packages = await client.db("assetverseDB").collection("packages").find().toArray();
+                res.send(packages);
+            } catch (error) {
+                res.status(500).send({ message: "Failed to load packages", error });
+            }
+        });
+
 
 
 
