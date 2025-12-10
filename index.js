@@ -5,8 +5,39 @@ const app = express();
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const port = 3000;
 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./firebase-service.json");
+
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
+
 app.use(cors());
 app.use(express.json());
+
+//middleares
+const verifyFBToken = async (req, res, next) => {
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+
+    try {
+        const idToken = token.split(' ')[1];
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        console.log('decoded in the token', decoded);
+        req.decoded_email = decoded.email;
+        next();
+    }
+    catch (err) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+
+
+}
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ox4mfpm.mongodb.net/?appName=Cluster0`;
 
@@ -40,7 +71,7 @@ async function run() {
             const result = await usersCollection.insertOne(newUser);
             res.send(result);
         });
-        app.get('/users/:email/role', async (req, res) => {
+        app.get('/users/:email/role', verifyFBToken, async (req, res) => {
             const email = req.params.email;
             const query = { email }
             const user = await usersCollection.findOne(query);
