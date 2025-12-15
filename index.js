@@ -56,6 +56,25 @@ async function run() {
 
         const db = client.db("assetverseDB");
         const usersCollection = db.collection("users");
+        const assetsCollection = db.collection("assets");
+
+
+
+        const verifyHR = async (req, res, next) => {
+            const email = req.decoded_email;
+            const query = { email };
+            const user = await usersCollection.findOne(query);
+            if (!user || user.role !== 'hr') {
+                return res.status(403).send({ message: 'Forbidden access. Only HR Managers allowed.' });
+            }
+            req.hr_data = {
+                hrEmail: user.email,
+                companyName: user.companyName,
+                packageLimit: user.packageLimit || 5,
+            };
+
+            next();
+        }
 
 
         //users related api
@@ -77,7 +96,6 @@ async function run() {
             const user = await usersCollection.findOne(query);
             res.send({ role: user?.role })
         })
-
         //packages
         app.get("/packages", async (req, res) => {
             try {
@@ -85,6 +103,80 @@ async function run() {
                 res.send(packages);
             } catch (error) {
                 res.status(500).send({ message: "Failed to load packages", error });
+            }
+        });
+
+        //HR related
+        app.post("/assets", verifyFBToken, verifyHR, async (req, res) => {
+            try {
+                const newAsset = req.body;
+                const hrDetails = req.hr_data;
+                const { productName, productImage, productType, productQuantity } = newAsset;
+
+                if (!productName || !productQuantity || !productType) {
+                    return res.status(400).send({ message: 'Missing required fields: name, quantity, or type.' });
+                }
+                const assetDoc = {
+                    productName,
+                    productImage,
+                    productType,
+                    productQuantity: parseInt(productQuantity),
+                    availableQuantity: parseInt(productQuantity),
+                    dateAdded: new Date(),
+                    hrEmail: hrDetails.hrEmail,
+                    companyName: hrDetails.companyName,
+                };
+
+                const result = await assetsCollection.insertOne(assetDoc);
+                return res.status(201).send(result);
+
+            } catch (error) {
+                console.error("Error adding asset:", error);
+                res.status(500).send({ message: "Failed to add asset." });
+            }
+        });
+
+        app.get("/assets", verifyFBToken, verifyHR, async (req, res) => {
+            try {
+                const hrDetails = req.hr_data;
+                const page = parseInt(req.query.page) || 1;
+                const limit = parseInt(req.query.limit) || 10;
+                const search = req.query.search || "";
+                const skip = (page - 1) * limit;
+                const sortBy = req.query.sort || 'dateAdded';
+                const order = req.query.order === 'asc' ? 1 : -1;
+                const typeFilter = req.query.type || "";
+                const query = {
+                    hrEmail: hrDetails.hrEmail,
+                };
+                if (search) {
+                    query.productName = { $regex: search, $options: 'i' };
+                }
+                if (typeFilter) {
+                    query.productType = typeFilter;
+                }
+                const sortOptions = {};
+                sortOptions[sortBy] = order;
+
+                const assets = await assetsCollection
+                    .find(query)
+                    .sort(sortOptions)
+                    .skip(skip)
+                    .limit(limit)
+                    .toArray();
+                const totalAssets = await assetsCollection.countDocuments(query);
+                const totalPages = Math.ceil(totalAssets / limit);
+
+                res.send({
+                    assets,
+                    totalAssets,
+                    totalPages,
+                    currentPage: page
+                });
+
+            } catch (error) {
+                console.error("Error fetching assets:", error);
+                res.status(500).send({ message: "Failed to fetch assets." });
             }
         });
 
