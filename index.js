@@ -2,7 +2,8 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const app = express();
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = 3000;
 
 const admin = require("firebase-admin");
@@ -57,6 +58,9 @@ async function run() {
         const db = client.db("assetverseDB");
         const usersCollection = db.collection("users");
         const assetsCollection = db.collection("assets");
+        const requestsCollection = db.collection("requests");
+        const employeeAffiliationsCollection = db.collection("employeeAffiliations");
+        const paymentCollection = db.collection('payments');
 
 
 
@@ -158,12 +162,7 @@ async function run() {
                 const sortOptions = {};
                 sortOptions[sortBy] = order;
 
-                const assets = await assetsCollection
-                    .find(query)
-                    .sort(sortOptions)
-                    .skip(skip)
-                    .limit(limit)
-                    .toArray();
+                const assets = await assetsCollection.find(query).sort(sortOptions).skip(skip).limit(limit).toArray();
                 const totalAssets = await assetsCollection.countDocuments(query);
                 const totalPages = Math.ceil(totalAssets / limit);
 
@@ -177,6 +176,505 @@ async function run() {
             } catch (error) {
                 console.error("Error fetching assets:", error);
                 res.status(500).send({ message: "Failed to fetch assets." });
+            }
+        });
+
+        // 1. HR-er shob asset requests load korar API
+        app.get("/all-requests", verifyFBToken, verifyHR, async (req, res) => {
+            const hrEmail = req.hr_data.hrEmail;
+            const search = req.query.search || "";
+
+            const query = { hrEmail: hrEmail };
+            if (search) {
+                query.$or = [
+                    { requesterName: { $regex: search, $options: 'i' } },
+                    { requesterEmail: { $regex: search, $options: 'i' } }
+                ];
+            }
+
+            const requests = await requestsCollection.find(query).toArray();
+            res.send(requests);
+        });
+
+
+        app.patch("/requests/approve/:id", verifyFBToken, verifyHR, async (req, res) => {
+            const id = req.params.id;
+            const request = await requestsCollection.findOne({ _id: new ObjectId(id) });
+            const hrEmail = req.hr_data.hrEmail;
+
+            if (!request) return res.status(404).send({ message: "Request not found" });
+            const hr = await usersCollection.findOne({ email: hrEmail });
+            if (hr.currentEmployees >= hr.packageLimit) {
+                return res.status(400).send({ message: "Package limit reached! Please upgrade." });
+            }
+
+            // A. Status update to Approved
+            await requestsCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: { requestStatus: "approved", approvalDate: new Date() } }
+            );
+
+            // B. Asset Quantity 1-ti komano
+            await assetsCollection.updateOne(
+                { _id: new ObjectId(request.assetId) },
+                { $inc: { availableQuantity: -1 } }
+            );
+
+            // C. Auto-Affiliation check kora
+            const isAffiliated = await employeeAffiliationsCollection.findOne({
+                employeeEmail: request.requesterEmail,
+                hrEmail: hrEmail
+            });
+
+            if (!isAffiliated) {
+                // Notun affiliation toiri kora
+                await employeeAffiliationsCollection.insertOne({
+                    employeeEmail: request.requesterEmail,
+                    employeeName: request.requesterName,
+                    hrEmail: hrEmail,
+                    companyName: hr.companyName,
+                    companyLogo: hr.companyLogo,
+                    affiliationDate: new Date(),
+                    status: "active"
+                });
+
+                // HR-er employee count 1 barano
+                await usersCollection.updateOne(
+                    { email: hrEmail },
+                    { $inc: { currentEmployees: 1 } }
+                );
+            }
+
+            res.send({ success: true, message: "Approved and Affiliated" });
+        });
+        app.patch("/requests/reject/:id", verifyFBToken, verifyHR, async (req, res) => {
+            try {
+                const id = req.params.id;
+                const result = await requestsCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { requestStatus: "rejected" } }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: "Reject failed" });
+            }
+        });
+
+        // HR-er affiliated employee list anar API
+        app.get("/my-employees", verifyFBToken, verifyHR, async (req, res) => {
+            const hrEmail = req.hr_data.hrEmail;
+
+            // 1. Affiliated employees khuje ber kora
+            const employees = await employeeAffiliationsCollection.find({
+                hrEmail: hrEmail,
+                status: "active"
+            }).toArray();
+
+            // 2. HR-er current package limit ebong total count ana
+            const hr = await usersCollection.findOne({ email: hrEmail });
+
+            res.send({
+                employees,
+                currentEmployees: hr.currentEmployees || 0,
+                packageLimit: hr.packageLimit || 5
+            });
+        });
+
+        // Employee-ke team theke remove korar API
+        app.patch("/remove-employee/:email", verifyFBToken, verifyHR, async (req, res) => {
+            const employeeEmail = req.params.email;
+            const hrEmail = req.hr_data.hrEmail;
+
+            // A. Affiliation inactive kora ba delete kora
+            await employeeAffiliationsCollection.deleteOne({
+                employeeEmail,
+                hrEmail
+            });
+
+            // B. HR-er current employee count 1 komano
+            await usersCollection.updateOne(
+                { email: hrEmail },
+                { $inc: { currentEmployees: -1 } }
+            );
+
+            res.send({ success: true, message: "Employee removed from team" });
+        });
+        // HR Home/Dashboard Stats
+        app.get("/hr-stats", verifyFBToken, verifyHR, async (req, res) => {
+            const hrEmail = req.hr_data.hrEmail;
+
+            // 1. Pie Chart Data: Returnable vs Non-returnable
+            const assets = await assetsCollection.find({ hrEmail: hrEmail }).toArray();
+            const returnableCount = assets.filter(a => a.productType === "Returnable").length;
+            const nonReturnableCount = assets.filter(a => a.productType === "Non-returnable").length;
+
+            // 2. Pending Requests (limited to top 5 for dashboard)
+            const pendingRequests = await requestsCollection.find({
+                hrEmail: hrEmail,
+                requestStatus: "pending"
+            }).limit(5).toArray();
+
+            // 3. Overall Totals
+            const totalRequests = await requestsCollection.countDocuments({ hrEmail: hrEmail });
+
+            res.send({
+                pieData: [
+                    { name: 'Returnable', value: returnableCount },
+                    { name: 'Non-returnable', value: nonReturnableCount }
+                ],
+                pendingRequests,
+                totalRequests
+            });
+        });
+
+        // Available employees (Jara kono team-e nei) khuje ber kora
+        app.get("/available-employees", verifyFBToken, verifyHR, async (req, res) => {
+            // 1. Shob affiliated employee-der email list nite hobe
+            const affiliated = await employeeAffiliationsCollection.find({}, { projection: { employeeEmail: 1 } }).toArray();
+            const affiliatedEmails = affiliated.map(a => a.employeeEmail);
+
+            // 2. Jara affiliated na ebong role 'employee', tader find kora
+            const query = {
+                role: "employee",
+                email: { $nin: affiliatedEmails }
+            };
+
+            const result = await usersCollection.find(query).toArray();
+            res.send(result);
+        });
+        // --- Missing API: Get HR Package Status ---
+        // app.get("/hr-package-status", verifyFBToken, verifyHR, async (req, res) => {
+        //     const hrEmail = req.hr_data.hrEmail;
+        //     const hr = await usersCollection.findOne({ email: hrEmail });
+
+        //     if (!hr) return res.status(404).send({ message: "HR not found" });
+
+        //     res.send({
+        //         currentEmployees: hr.currentEmployees || 0,
+        //         packageLimit: hr.packageLimit || 5
+        //     });
+        // });
+        app.get("/hr-package-status", verifyFBToken, async (req, res) => {
+            const email = req.decoded_email;
+
+            const hr = await usersCollection.findOne({ email });
+
+            if (!hr) {
+                return res.status(404).send({ message: "HR not found" });
+            }
+
+            res.send({
+                currentEmployees: hr.currentEmployees || 0,
+                packageLimit: hr.packageLimit || 5
+            });
+        });
+
+        // --- Add to Team API (Slightly improved for safety) ---
+        app.post("/add-to-team", verifyFBToken, verifyHR, async (req, res) => {
+            try {
+                const { employeeEmail, employeeName } = req.body;
+                const hrEmail = req.hr_data.hrEmail;
+
+                const hr = await usersCollection.findOne({ email: hrEmail });
+
+                // Safety check for package limit
+                const currentCount = hr.currentEmployees || 0;
+                const limit = hr.packageLimit || 5;
+
+                if (currentCount >= limit) {
+                    return res.status(400).send({ message: "Limit reached! Upgrade your package." });
+                }
+
+                // Affiliation Data
+                const affiliationData = {
+                    employeeEmail,
+                    employeeName,
+                    hrEmail,
+                    companyName: hr.companyName || "Your Company",
+                    companyLogo: hr.companyLogo || hr.image || "",
+                    affiliationDate: new Date(),
+                    status: "active"
+                };
+
+                await employeeAffiliationsCollection.insertOne(affiliationData);
+
+                // Increment HR count
+                await usersCollection.updateOne(
+                    { email: hrEmail },
+                    { $inc: { currentEmployees: 1 } } // Automatic 1 barabe
+                );
+
+                res.send({ success: true });
+            } catch (error) {
+                res.status(500).send({ message: "Internal Server Error" });
+            }
+        });
+
+
+
+        //employee
+        // 1. Get all assets where quantity > 0 [cite: 224]
+        app.get("/available-assets", verifyFBToken, async (req, res) => {
+            const assets = await assetsCollection.find({
+                availableQuantity: { $gt: 0 }
+            }).toArray();
+            res.send(assets);
+        });
+
+        // 2. Create an asset request [cite: 226, 276]
+        app.post("/asset-requests", verifyFBToken, async (req, res) => {
+            const request = req.body;
+            request.requesterEmail = req.decoded_email;
+            request.requestStatus = "pending";
+            request.requestDate = new Date();
+
+            const result = await requestsCollection.insertOne(request);
+            res.send(result);
+        });
+        // 1. Employee-r nijer request gulo load kora
+        app.get("/my-requests", verifyFBToken, async (req, res) => {
+            const email = req.decoded_email;
+            const search = req.query.search || "";
+            const status = req.query.status || "";
+
+            const query = { requesterEmail: email };
+            if (search) {
+                query.assetName = { $regex: search, $options: 'i' };
+            }
+            if (status) {
+                query.requestStatus = status;
+            }
+
+            const result = await requestsCollection.find(query).toArray();
+            res.send(result);
+        });
+
+        // 2. Pending request Cancel kora
+        app.delete("/requests/cancel/:id", verifyFBToken, async (req, res) => {
+            const id = req.params.id;
+            const result = await requestsCollection.deleteOne({
+                _id: new ObjectId(id),
+                requestStatus: "pending"
+            });
+            res.send(result);
+        });
+
+        // 3. Asset Return kora
+        app.patch("/requests/return/:id", verifyFBToken, async (req, res) => {
+            const id = req.params.id;
+
+            // A. Request khuje ber kora
+            const request = await requestsCollection.findOne({ _id: new ObjectId(id) });
+
+            // B. Status "returned" kora
+            await requestsCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: { requestStatus: "returned" } }
+            );
+
+            // C. Asset collection-e quantity 1 barano
+            await assetsCollection.updateOne(
+                { _id: new ObjectId(request.assetId) },
+                { $inc: { availableQuantity: 1 } }
+            );
+
+            res.send({ success: true });
+        });
+
+        // Employee Home/Dashboard Stats
+        app.get("/employee-stats", verifyFBToken, async (req, res) => {
+            const email = req.decoded_email;
+
+            // 1. Pending requests list
+            const pendingRequests = await requestsCollection.find({
+                requesterEmail: email,
+                requestStatus: "pending"
+            }).toArray();
+
+            // 2. Current Month requests
+            const currentMonth = new Date().getMonth();
+            const currentYear = new Date().getFullYear();
+
+            const allRequests = await requestsCollection.find({ requesterEmail: email }).toArray();
+            const monthlyRequests = allRequests.filter(req => {
+                const date = new Date(req.requestDate);
+                return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
+            });
+
+            // 3. Affiliation Info
+            const affiliation = await employeeAffiliationsCollection.findOne({ employeeEmail: email });
+
+            res.send({
+                pendingRequests,
+                monthlyRequests,
+                affiliation
+            });
+        });
+
+        // 1. Create Checkout Session
+        app.post('/payment-checkout-session', verifyFBToken, verifyHR, async (req, res) => {
+            const { price, members } = req.body;
+            const email = req.decoded_email;
+
+            try {
+                const session = await stripe.checkout.sessions.create({
+                    payment_method_types: ['card'],
+                    line_items: [{
+                        price_data: {
+                            currency: 'usd',
+                            product_data: {
+                                name: `Upgrade: ${members} Slots`,
+                                description: 'Increase your employee limit'
+                            },
+                            unit_amount: parseInt(price) * 100,
+                        },
+                        quantity: 1,
+                    }],
+                    mode: 'payment',
+                    metadata: {
+                        hrEmail: email,
+                        newLimit: String(members) // Metadata string hotei hobe
+                    },
+                    success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                    cancel_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade`,
+                });
+                res.send({ url: session.url });
+            } catch (error) {
+                res.status(500).send({ message: error.message });
+            }
+        });
+
+        // 2. Verify and Update Limit
+        app.patch('/payment-success', verifyFBToken, async (req, res) => {
+            const sessionId = req.query.session_id;
+
+            if (!sessionId) {
+                return res.status(400).send({ success: false, message: "Session ID missing" });
+            }
+
+            try {
+                const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+                if (session.payment_status !== 'paid') {
+                    return res.status(400).send({ success: false, message: "Payment not completed" });
+                }
+
+                const transactionId = session.payment_intent;
+                const hrEmail = session.metadata.hrEmail;
+                const addedSlots = parseInt(session.metadata.newLimit) || 0;
+
+                if (addedSlots <= 0) {
+                    return res.status(400).send({ success: false, message: "Invalid slot count" });
+                }
+
+                // 🔁 Duplicate check
+                const alreadyDone = await paymentCollection.findOne({ transactionId });
+                if (alreadyDone) {
+                    return res.send({ success: true, message: "Already processed" });
+                }
+
+                // 🔥 GET CURRENT HR
+                const hr = await usersCollection.findOne({ email: hrEmail });
+                if (!hr) {
+                    return res.status(404).send({ success: false, message: "HR not found" });
+                }
+
+                const currentLimit = hr.packageLimit || 5;
+                const newLimit = currentLimit + addedSlots;
+
+                // 🔥 SAFE UPDATE
+                await usersCollection.updateOne(
+                    { email: hrEmail },
+                    {
+                        $set: {
+                            packageLimit: newLimit,
+                            lastUpgrade: new Date()
+                        }
+                    }
+                );
+
+                // Payment record
+                await paymentCollection.insertOne({
+                    hrEmail,
+                    transactionId,
+                    amount: session.amount_total / 100,
+                    addedSlots,
+                    date: new Date()
+                });
+
+                res.send({
+                    success: true,
+                    message: "Limit upgraded successfully",
+                    newLimit
+                });
+
+            } catch (error) {
+                console.error("Payment Error:", error);
+                res.status(500).send({ success: false, message: "Internal Server Error" });
+            }
+        });
+
+        app.get('/payment-history', verifyFBToken, verifyHR, async (req, res) => {
+            const hrEmail = req.decoded_email; // middleware theke pawa email
+            const result = await paymentCollection.find({ hrEmail }).sort({ date: -1 }).toArray();
+            res.send(result);
+        });
+
+        app.get('/my-team', verifyFBToken, async (req, res) => {
+            try {
+                const email = req.decoded_email;
+
+                // Logged-in user
+                const user = await usersCollection.findOne({ email });
+                if (!user) {
+                    return res.status(404).send({ message: "User not found" });
+                }
+
+                // HR email determine
+                let hrEmail;
+                if (user.role === 'hr') {
+                    hrEmail = user.email;
+                } else {
+                    // employee হলে affiliation থেকে HR বের করবো
+                    const affiliation = await employeeAffiliationsCollection.findOne({
+                        employeeEmail: email,
+                        status: "active"
+                    });
+
+                    if (!affiliation) {
+                        return res.send([]); // team নাই
+                    }
+
+                    hrEmail = affiliation.hrEmail;
+                }
+
+                // 🔥 HR info
+                const hr = await usersCollection.findOne({ email: hrEmail, role: 'hr' });
+
+                // 🔥 Employee affiliations
+                const affiliations = await employeeAffiliationsCollection.find({
+                    hrEmail,
+                    status: "active"
+                }).toArray();
+
+                // 🔥 Employee user details join করা
+                const employeeEmails = affiliations.map(a => a.employeeEmail);
+
+                const employees = await usersCollection.find({
+                    email: { $in: employeeEmails }
+                }).toArray();
+
+                // 🔥 Final team array
+                const team = [
+                    hr,
+                    ...employees
+                ];
+
+                res.send(team);
+
+            } catch (error) {
+                console.error("My Team Error:", error);
+                res.status(500).send({ message: "Internal Server Error" });
             }
         });
 
