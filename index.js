@@ -182,7 +182,6 @@ async function run() {
         app.get("/all-requests", verifyFBToken, verifyHR, async (req, res) => {
             const hrEmail = req.hr_data.hrEmail;
             const search = req.query.search || "";
-
             const query = { hrEmail: hrEmail };
             if (search) {
                 query.$or = [
@@ -190,11 +189,9 @@ async function run() {
                     { requesterEmail: { $regex: search, $options: 'i' } }
                 ];
             }
-
             const requests = await requestsCollection.find(query).toArray();
             res.send(requests);
         });
-
 
         app.patch("/requests/approve/:id", verifyFBToken, verifyHR, async (req, res) => {
             const id = req.params.id;
@@ -206,27 +203,19 @@ async function run() {
             if (hr.currentEmployees >= hr.packageLimit) {
                 return res.status(400).send({ message: "Package limit reached! Please upgrade." });
             }
-
-            // A. Status update to Approved
             await requestsCollection.updateOne(
                 { _id: new ObjectId(id) },
                 { $set: { requestStatus: "approved", approvalDate: new Date() } }
             );
-
-            // B. Asset Quantity 1-ti komano
             await assetsCollection.updateOne(
                 { _id: new ObjectId(request.assetId) },
                 { $inc: { availableQuantity: -1 } }
             );
-
-            // C. Auto-Affiliation check kora
             const isAffiliated = await employeeAffiliationsCollection.findOne({
                 employeeEmail: request.requesterEmail,
                 hrEmail: hrEmail
             });
-
             if (!isAffiliated) {
-                // Notun affiliation toiri kora
                 await employeeAffiliationsCollection.insertOne({
                     employeeEmail: request.requesterEmail,
                     employeeName: request.requesterName,
@@ -236,16 +225,14 @@ async function run() {
                     affiliationDate: new Date(),
                     status: "active"
                 });
-
-                // HR-er employee count 1 barano
                 await usersCollection.updateOne(
                     { email: hrEmail },
                     { $inc: { currentEmployees: 1 } }
                 );
             }
-
             res.send({ success: true, message: "Approved and Affiliated" });
         });
+        
         app.patch("/requests/reject/:id", verifyFBToken, verifyHR, async (req, res) => {
             try {
                 const id = req.params.id;
