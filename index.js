@@ -260,19 +260,11 @@ async function run() {
             }
         });
 
-        // HR-er affiliated employee list anar API
         app.get("/my-employees", verifyFBToken, verifyHR, async (req, res) => {
             const hrEmail = req.hr_data.hrEmail;
-
-            // 1. Affiliated employees khuje ber kora
-            const employees = await employeeAffiliationsCollection.find({
-                hrEmail: hrEmail,
-                status: "active"
+            const employees = await employeeAffiliationsCollection.find({hrEmail: hrEmail,status: "active"
             }).toArray();
-
-            // 2. HR-er current package limit ebong total count ana
             const hr = await usersCollection.findOne({ email: hrEmail });
-
             res.send({
                 employees,
                 currentEmployees: hr.currentEmployees || 0,
