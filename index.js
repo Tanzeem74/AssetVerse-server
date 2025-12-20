@@ -271,26 +271,18 @@ async function run() {
                 packageLimit: hr.packageLimit || 5
             });
         });
-
-        // Employee-ke team theke remove korar API
+        //remobe
         app.patch("/remove-employee/:email", verifyFBToken, verifyHR, async (req, res) => {
             const employeeEmail = req.params.email;
             const hrEmail = req.hr_data.hrEmail;
-
-            // A. Affiliation inactive kora ba delete kora
-            await employeeAffiliationsCollection.deleteOne({
-                employeeEmail,
-                hrEmail
-            });
-
-            // B. HR-er current employee count 1 komano
+            await employeeAffiliationsCollection.deleteOne({employeeEmail,hrEmail});
             await usersCollection.updateOne(
                 { email: hrEmail },
                 { $inc: { currentEmployees: -1 } }
             );
-
             res.send({ success: true, message: "Employee removed from team" });
         });
+        
         // HR Home/Dashboard Stats
         app.get("/hr-stats", verifyFBToken, verifyHR, async (req, res) => {
             const hrEmail = req.hr_data.hrEmail;
