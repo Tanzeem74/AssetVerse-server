@@ -179,7 +179,6 @@ async function run() {
             }
         });
 
-        // 1. HR-er shob asset requests load korar API
         app.get("/all-requests", verifyFBToken, verifyHR, async (req, res) => {
             const hrEmail = req.hr_data.hrEmail;
             const search = req.query.search || "";
@@ -262,7 +261,8 @@ async function run() {
 
         app.get("/my-employees", verifyFBToken, verifyHR, async (req, res) => {
             const hrEmail = req.hr_data.hrEmail;
-            const employees = await employeeAffiliationsCollection.find({hrEmail: hrEmail,status: "active"
+            const employees = await employeeAffiliationsCollection.find({
+                hrEmail: hrEmail, status: "active"
             }).toArray();
             const hr = await usersCollection.findOne({ email: hrEmail });
             res.send({
@@ -275,14 +275,14 @@ async function run() {
         app.patch("/remove-employee/:email", verifyFBToken, verifyHR, async (req, res) => {
             const employeeEmail = req.params.email;
             const hrEmail = req.hr_data.hrEmail;
-            await employeeAffiliationsCollection.deleteOne({employeeEmail,hrEmail});
+            await employeeAffiliationsCollection.deleteOne({ employeeEmail, hrEmail });
             await usersCollection.updateOne(
                 { email: hrEmail },
                 { $inc: { currentEmployees: -1 } }
             );
             res.send({ success: true, message: "Employee removed from team" });
         });
-        
+
         // HR Home/Dashboard Stats
         app.get("/hr-stats", verifyFBToken, verifyHR, async (req, res) => {
             const hrEmail = req.hr_data.hrEmail;
@@ -311,65 +311,41 @@ async function run() {
             });
         });
 
-        // Available employees (Jara kono team-e nei) khuje ber kora
+        //available emplys
         app.get("/available-employees", verifyFBToken, verifyHR, async (req, res) => {
-            // 1. Shob affiliated employee-der email list nite hobe
             const affiliated = await employeeAffiliationsCollection.find({}, { projection: { employeeEmail: 1 } }).toArray();
             const affiliatedEmails = affiliated.map(a => a.employeeEmail);
-
-            // 2. Jara affiliated na ebong role 'employee', tader find kora
             const query = {
                 role: "employee",
                 email: { $nin: affiliatedEmails }
             };
-
             const result = await usersCollection.find(query).toArray();
             res.send(result);
         });
-        // --- Missing API: Get HR Package Status ---
-        // app.get("/hr-package-status", verifyFBToken, verifyHR, async (req, res) => {
-        //     const hrEmail = req.hr_data.hrEmail;
-        //     const hr = await usersCollection.findOne({ email: hrEmail });
 
-        //     if (!hr) return res.status(404).send({ message: "HR not found" });
-
-        //     res.send({
-        //         currentEmployees: hr.currentEmployees || 0,
-        //         packageLimit: hr.packageLimit || 5
-        //     });
-        // });
         app.get("/hr-package-status", verifyFBToken, async (req, res) => {
             const email = req.decoded_email;
-
             const hr = await usersCollection.findOne({ email });
-
             if (!hr) {
                 return res.status(404).send({ message: "HR not found" });
             }
-
             res.send({
                 currentEmployees: hr.currentEmployees || 0,
                 packageLimit: hr.packageLimit || 5
             });
         });
 
-        // --- Add to Team API (Slightly improved for safety) ---
+        //adding to team
         app.post("/add-to-team", verifyFBToken, verifyHR, async (req, res) => {
             try {
                 const { employeeEmail, employeeName } = req.body;
                 const hrEmail = req.hr_data.hrEmail;
-
                 const hr = await usersCollection.findOne({ email: hrEmail });
-
-                // Safety check for package limit
                 const currentCount = hr.currentEmployees || 0;
                 const limit = hr.packageLimit || 5;
-
                 if (currentCount >= limit) {
                     return res.status(400).send({ message: "Limit reached! Upgrade your package." });
                 }
-
-                // Affiliation Data
                 const affiliationData = {
                     employeeEmail,
                     employeeName,
@@ -379,15 +355,11 @@ async function run() {
                     affiliationDate: new Date(),
                     status: "active"
                 };
-
                 await employeeAffiliationsCollection.insertOne(affiliationData);
-
-                // Increment HR count
                 await usersCollection.updateOne(
                     { email: hrEmail },
-                    { $inc: { currentEmployees: 1 } } // Automatic 1 barabe
+                    { $inc: { currentEmployees: 1 } }
                 );
-
                 res.send({ success: true });
             } catch (error) {
                 res.status(500).send({ message: "Internal Server Error" });
