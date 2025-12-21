@@ -348,12 +348,12 @@ async function run() {
         // 1. Delete Asset
         app.delete("/assets/:id", verifyFBToken, verifyHR, async (req, res) => {
             const id = req.params.id;
-            const query = { _id: new ObjectId(id), hrEmail: req.hr_data.hrEmail }; // Jeno shudhu nijer asset delete korte pare
+            const query = { _id: new ObjectId(id), hrEmail: req.hr_data.hrEmail };
             const result = await assetsCollection.deleteOne(query);
             res.send(result);
         });
 
-        // 2. Update Asset
+        //Update Asset
         app.patch("/assets/:id", verifyFBToken, verifyHR, async (req, res) => {
             const id = req.params.id;
             const filter = { _id: new ObjectId(id), hrEmail: req.hr_data.hrEmail };
@@ -364,7 +364,7 @@ async function run() {
                     productName: updatedAsset.productName,
                     productType: updatedAsset.productType,
                     productQuantity: parseInt(updatedAsset.productQuantity),
-                    availableQuantity: parseInt(updatedAsset.productQuantity), // Optional: quantity barale available-o boro hobe
+                    availableQuantity: parseInt(updatedAsset.productQuantity),
                 },
             };
 
