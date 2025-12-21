@@ -455,7 +455,6 @@ async function run() {
             }
         });
 
-        // 2. Verify and Update Limit
         app.patch('/payment-success', verifyFBToken, async (req, res) => {
             const sessionId = req.query.session_id;
 
@@ -477,14 +476,11 @@ async function run() {
                 if (addedSlots <= 0) {
                     return res.status(400).send({ success: false, message: "Invalid slot count" });
                 }
-
-                // 🔁 Duplicate check
                 const alreadyDone = await paymentCollection.findOne({ transactionId });
                 if (alreadyDone) {
                     return res.send({ success: true, message: "Already processed" });
                 }
 
-                // 🔥 GET CURRENT HR
                 const hr = await usersCollection.findOne({ email: hrEmail });
                 if (!hr) {
                     return res.status(404).send({ success: false, message: "HR not found" });
@@ -492,8 +488,6 @@ async function run() {
 
                 const currentLimit = hr.packageLimit || 5;
                 const newLimit = currentLimit + addedSlots;
-
-                // 🔥 SAFE UPDATE
                 await usersCollection.updateOne(
                     { email: hrEmail },
                     {
@@ -504,7 +498,6 @@ async function run() {
                     }
                 );
 
-                // Payment record
                 await paymentCollection.insertOne({
                     hrEmail,
                     transactionId,
@@ -526,7 +519,7 @@ async function run() {
         });
 
         app.get('/payment-history', verifyFBToken, verifyHR, async (req, res) => {
-            const hrEmail = req.decoded_email; // middleware theke pawa email
+            const hrEmail = req.decoded_email;
             const result = await paymentCollection.find({ hrEmail }).sort({ date: -1 }).toArray();
             res.send(result);
         });
