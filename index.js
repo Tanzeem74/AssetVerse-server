@@ -232,7 +232,7 @@ async function run() {
             }
             res.send({ success: true, message: "Approved and Affiliated" });
         });
-        
+
         app.patch("/requests/reject/:id", verifyFBToken, verifyHR, async (req, res) => {
             try {
                 const id = req.params.id;
@@ -343,6 +343,33 @@ async function run() {
             } catch (error) {
                 res.status(500).send({ message: "Internal Server Error" });
             }
+        });
+
+        // 1. Delete Asset
+        app.delete("/assets/:id", verifyFBToken, verifyHR, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id), hrEmail: req.hr_data.hrEmail }; // Jeno shudhu nijer asset delete korte pare
+            const result = await assetsCollection.deleteOne(query);
+            res.send(result);
+        });
+
+        // 2. Update Asset
+        app.patch("/assets/:id", verifyFBToken, verifyHR, async (req, res) => {
+            const id = req.params.id;
+            const filter = { _id: new ObjectId(id), hrEmail: req.hr_data.hrEmail };
+            const updatedAsset = req.body;
+
+            const updateDoc = {
+                $set: {
+                    productName: updatedAsset.productName,
+                    productType: updatedAsset.productType,
+                    productQuantity: parseInt(updatedAsset.productQuantity),
+                    availableQuantity: parseInt(updatedAsset.productQuantity), // Optional: quantity barale available-o boro hobe
+                },
+            };
+
+            const result = await assetsCollection.updateOne(filter, updateDoc);
+            res.send(result);
         });
 
 
@@ -556,7 +583,7 @@ async function run() {
                 const employees = await usersCollection.find({
                     email: { $in: employeeEmails }
                 }).toArray();
-                const team = [hr,...employees];
+                const team = [hr, ...employees];
                 res.send(team);
 
             } catch (error) {
