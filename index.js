@@ -424,11 +424,9 @@ async function run() {
             });
         });
 
-        // 1. Create Checkout Session
         app.post('/payment-checkout-session', verifyFBToken, verifyHR, async (req, res) => {
             const { price, members } = req.body;
             const email = req.decoded_email;
-
             try {
                 const session = await stripe.checkout.sessions.create({
                     payment_method_types: ['card'],
@@ -446,7 +444,7 @@ async function run() {
                     mode: 'payment',
                     metadata: {
                         hrEmail: email,
-                        newLimit: String(members) // Metadata string hotei hobe
+                        newLimit: String(members)
                     },
                     success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
                     cancel_url: `${process.env.SITE_DOMAIN}/dashboard/upgrade`,
