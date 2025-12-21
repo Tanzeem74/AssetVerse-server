@@ -270,24 +270,16 @@ async function run() {
             res.send({ success: true, message: "Employee removed from team" });
         });
 
-        // HR Home/Dashboard Stats
         app.get("/hr-stats", verifyFBToken, verifyHR, async (req, res) => {
             const hrEmail = req.hr_data.hrEmail;
-
-            // 1. Pie Chart Data: Returnable vs Non-returnable
             const assets = await assetsCollection.find({ hrEmail: hrEmail }).toArray();
             const returnableCount = assets.filter(a => a.productType === "Returnable").length;
             const nonReturnableCount = assets.filter(a => a.productType === "Non-returnable").length;
-
-            // 2. Pending Requests (limited to top 5 for dashboard)
             const pendingRequests = await requestsCollection.find({
                 hrEmail: hrEmail,
                 requestStatus: "pending"
             }).limit(5).toArray();
-
-            // 3. Overall Totals
             const totalRequests = await requestsCollection.countDocuments({ hrEmail: hrEmail });
-
             res.send({
                 pieData: [
                     { name: 'Returnable', value: returnableCount },
@@ -356,15 +348,12 @@ async function run() {
 
 
         //employee
-        // 1. Get all assets where quantity > 0 [cite: 224]
         app.get("/available-assets", verifyFBToken, async (req, res) => {
             const assets = await assetsCollection.find({
                 availableQuantity: { $gt: 0 }
             }).toArray();
             res.send(assets);
         });
-
-        // 2. Create an asset request [cite: 226, 276]
         app.post("/asset-requests", verifyFBToken, async (req, res) => {
             const request = req.body;
             request.requesterEmail = req.decoded_email;
@@ -374,7 +363,6 @@ async function run() {
             const result = await requestsCollection.insertOne(request);
             res.send(result);
         });
-        // 1. Employee-r nijer request gulo load kora
         app.get("/my-requests", verifyFBToken, async (req, res) => {
             const email = req.decoded_email;
             const search = req.query.search || "";
@@ -391,8 +379,6 @@ async function run() {
             const result = await requestsCollection.find(query).toArray();
             res.send(result);
         });
-
-        // 2. Pending request Cancel kora
         app.delete("/requests/cancel/:id", verifyFBToken, async (req, res) => {
             const id = req.params.id;
             const result = await requestsCollection.deleteOne({
@@ -402,20 +388,13 @@ async function run() {
             res.send(result);
         });
 
-        // 3. Asset Return kora
         app.patch("/requests/return/:id", verifyFBToken, async (req, res) => {
             const id = req.params.id;
-
-            // A. Request khuje ber kora
             const request = await requestsCollection.findOne({ _id: new ObjectId(id) });
-
-            // B. Status "returned" kora
             await requestsCollection.updateOne(
                 { _id: new ObjectId(id) },
                 { $set: { requestStatus: "returned" } }
             );
-
-            // C. Asset collection-e quantity 1 barano
             await assetsCollection.updateOne(
                 { _id: new ObjectId(request.assetId) },
                 { $inc: { availableQuantity: 1 } }
@@ -423,18 +402,12 @@ async function run() {
 
             res.send({ success: true });
         });
-
-        // Employee Home/Dashboard Stats
         app.get("/employee-stats", verifyFBToken, async (req, res) => {
             const email = req.decoded_email;
-
-            // 1. Pending requests list
             const pendingRequests = await requestsCollection.find({
                 requesterEmail: email,
                 requestStatus: "pending"
             }).toArray();
-
-            // 2. Current Month requests
             const currentMonth = new Date().getMonth();
             const currentYear = new Date().getFullYear();
 
@@ -443,10 +416,7 @@ async function run() {
                 const date = new Date(req.requestDate);
                 return date.getMonth() === currentMonth && date.getFullYear() === currentYear;
             });
-
-            // 3. Affiliation Info
             const affiliation = await employeeAffiliationsCollection.findOne({ employeeEmail: email });
-
             res.send({
                 pendingRequests,
                 monthlyRequests,
