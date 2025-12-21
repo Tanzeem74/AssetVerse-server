@@ -527,53 +527,36 @@ async function run() {
         app.get('/my-team', verifyFBToken, async (req, res) => {
             try {
                 const email = req.decoded_email;
-
-                // Logged-in user
                 const user = await usersCollection.findOne({ email });
                 if (!user) {
                     return res.status(404).send({ message: "User not found" });
                 }
-
-                // HR email determine
                 let hrEmail;
                 if (user.role === 'hr') {
                     hrEmail = user.email;
                 } else {
-                    // employee হলে affiliation থেকে HR বের করবো
                     const affiliation = await employeeAffiliationsCollection.findOne({
                         employeeEmail: email,
                         status: "active"
                     });
 
                     if (!affiliation) {
-                        return res.send([]); // team নাই
+                        return res.send([]);
                     }
 
                     hrEmail = affiliation.hrEmail;
                 }
-
-                // 🔥 HR info
                 const hr = await usersCollection.findOne({ email: hrEmail, role: 'hr' });
-
-                // 🔥 Employee affiliations
                 const affiliations = await employeeAffiliationsCollection.find({
                     hrEmail,
                     status: "active"
                 }).toArray();
-
-                // 🔥 Employee user details join করা
                 const employeeEmails = affiliations.map(a => a.employeeEmail);
 
                 const employees = await usersCollection.find({
                     email: { $in: employeeEmails }
                 }).toArray();
-
-                // 🔥 Final team array
-                const team = [
-                    hr,
-                    ...employees
-                ];
-
+                const team = [hr,...employees];
                 res.send(team);
 
             } catch (error) {
