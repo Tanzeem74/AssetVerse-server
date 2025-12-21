@@ -591,6 +591,26 @@ async function run() {
                 res.status(500).send({ message: "Internal Server Error" });
             }
         });
+        app.patch('/users/:email', verifyFBToken, async (req, res) => {
+            const email = req.params.email;
+            const { name, photoURL } = req.body;
+            const filter = { email: email };
+            const updateDoc = { $set: { name, photoURL } };
+            const result = await usersCollection.updateOne(filter, updateDoc);
+            res.send(result);
+        });
+        app.get('/users/:email', verifyFBToken, async (req, res) => {
+            const email = req.params.email;
+            if (req.decoded_email !== email) {
+                return res.status(403).send({ message: 'Forbidden access' });
+            }
+            const query = { email: email };
+            const user = await usersCollection.findOne(query);
+            if (!user) {
+                return res.status(404).send({ message: 'User not found' });
+            }
+            res.send(user);
+        });
 
 
 
